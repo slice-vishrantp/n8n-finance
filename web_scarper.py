@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+from datetime import timezone
 import io
 import json
 import re
@@ -85,6 +86,7 @@ def _require_requests() -> None:
 def make_session(insecure: bool = False, ca_bundle: Optional[str] = None) -> "requests.Session":
     """
     Create a shared session with retries/backoff.
+    Enhanced for n8n environments with better error handling.
 
     If your environment does TLS inspection (common in corporate networks), prefer:
       --ca-bundle /path/to/corp-ca.pem
@@ -94,19 +96,32 @@ def make_session(insecure: bool = False, ca_bundle: Optional[str] = None) -> "re
     assert requests is not None  # mypy
 
     s = requests.Session()
+    # Enhanced retry strategy for n8n (more retries, longer backoff)
     retry = Retry(
-        total=3,
-        connect=3,
-        read=3,
-        status=3,
-        backoff_factor=0.7,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET", "HEAD"]),
+        total=5,  # Increased from 3
+        connect=5,
+        read=5,
+        status=5,
+        backoff_factor=1.0,  # Increased from 0.7
+        status_forcelist=(429, 500, 502, 503, 504, 408, 520, 521, 522, 523, 524),
+        allowed_methods=frozenset(["GET", "HEAD", "POST"]),
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
+
+    # Enhanced headers for better compatibility
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/121.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+    })
 
     if insecure:
         s.verify = False
@@ -437,7 +452,7 @@ def fetch_icra_rating_details(
         "short_term_rating": short_term,
         "updated_on": updated_on,
         "source_url": url,
-        "date_retrieved": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "date_retrieved": dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "status": "ok" if (long_term or short_term) else "parsed_no_rating",
     }
 
@@ -612,7 +627,7 @@ def care_ratings_from_url(
     Example URL:
       https://www.careratings.com/upload/CompanyFiles/PR/202510161043_Jindal_Stainless_Limited.pdf
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     try:
         pdf_bytes = fetch_bytes(url, session=session, timeout_s=45)
         text = extract_pdf_text(pdf_bytes)
@@ -659,7 +674,7 @@ def icra_rationale_from_id(
       https://www.icra.in/Rating/ShowRationalReportFilePdf/134727
     """
     rid = str(rationale_id).strip()
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if not rid.isdigit():
         return {
             "agency": "ICRA",
@@ -884,7 +899,7 @@ def indiaratings_pressrelease_from_id(
       https://www.indiaratings.co.in/pressReleases/GetPressreleaseData_BeforeLogin?pressReleaseId=71503
     """
     pid = str(pressrelease_id).strip()
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     source_page = f"{INDIARATINGS_BASE}/pressrelease/{pid}"
     api_url = f"{INDIARATINGS_BASE}/pressReleases/GetPressreleaseData_BeforeLogin"
     try:
@@ -1070,7 +1085,7 @@ def indiaratings_ratings_for_companies(
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for c in [x.strip() for x in companies if (x or "").strip()]:
-        retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         try:
             # IndiaRatings search endpoint appears to work best with single tokens; multi-word queries often return 0.
             tokens = re.findall(r"[A-Za-z0-9]+", c)
@@ -1253,7 +1268,7 @@ def care_ratings_for_companies(
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for c in [x.strip() for x in companies if (x or "").strip()]:
-        retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         # 1) Resolve CARE "companyName" identifier (encoded CompanyID used by their APIs)
         pr_url = ""
         updated_on = ""
@@ -1537,7 +1552,7 @@ def acuite_from_url(
     Parse an Acuité press release page like:
       https://connect.acuite.in/fcompany-details/APOLLO_MICRO_SYSTEMS_LIMITED/15th_Jul_25
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     try:
         html = fetch_text(url, session=session, timeout_s=30)
         from bs4 import BeautifulSoup  # type: ignore
@@ -1931,7 +1946,7 @@ def acuite_ratings_for_companies(
                     "outlook": "",
                     "updated_on": "",
                     "source_url": "",
-                    "date_retrieved": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "date_retrieved": dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
                     "status": "not_found",
                 }
             )
@@ -2882,7 +2897,7 @@ def crisil_ratings_for_companies(
     - Only if some companies are still missing, page through Rating Rationales (cmd=RR) and stop
       once the missing companies are found.
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     inputs: List[str] = [c.strip() for c in companies if (c or "").strip()]
     if not inputs:
@@ -3359,7 +3374,7 @@ def final_ratings_all_agencies_for_companies(
     Columns:
       company_name, agency, company_id, short_term_rating, short_term_date, long_term_rating, long_term_date
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     inputs = [c.strip() for c in companies if (c or "").strip()]
     out: List[Dict[str, str]] = []
 
@@ -3408,9 +3423,13 @@ def final_ratings_all_agencies_for_companies(
                 agg.get("source_url", ""),
                 "ok" if (agg.get("short_term_rating") or agg.get("long_term_rating")) else "parsed_no_signal",
             )
-    except Exception:
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)[:100]  # Limit length
+        status_msg = f"error:{error_type}"
+        print(f"CRISIL scraping failed: {error_type}: {error_msg}", file=sys.stderr)
         for c in inputs:
-            emit(c, "CRISIL", "", "", "", "", "", "", "error")
+            emit(c, "CRISIL", "", "", "", "", "", "", status_msg)
 
     # CARE
     try:
@@ -3430,9 +3449,13 @@ def final_ratings_all_agencies_for_companies(
                 r.get("source_url") or "",
                 r.get("status") or ("ok" if (r.get("short_term_rating") or r.get("long_term_rating")) else "not_found"),
             )
-    except Exception:
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)[:100]
+        status_msg = f"error:{error_type}"
+        print(f"CARE Ratings scraping failed: {error_type}: {error_msg}", file=sys.stderr)
         for c in inputs:
-            emit(c, "CARE Ratings", "", "", "", "", "", "", "error")
+            emit(c, "CARE Ratings", "", "", "", "", "", "", status_msg)
 
     # ICRA (RatingDetails)
     try:
@@ -3456,12 +3479,18 @@ def final_ratings_all_agencies_for_companies(
                     row.get("source_url") or "",
                     row.get("status") or "ok",
                 )
-            except Exception:
-                emit(c, "ICRA", "", "", "", "", "", "", "error")
+            except Exception as e:
+                error_type = type(e).__name__
+                status_msg = f"error:{error_type}"
+                print(f"ICRA scraping failed for {c}: {error_type}: {str(e)[:100]}", file=sys.stderr)
+                emit(c, "ICRA", "", "", "", "", "", "", status_msg)
             time.sleep(max(0.0, float(sleep_s)))
-    except Exception:
+    except Exception as e:
+        error_type = type(e).__name__
+        status_msg = f"error:{error_type}"
+        print(f"ICRA scraping failed (general): {error_type}: {str(e)[:100]}", file=sys.stderr)
         for c in inputs:
-            emit(c, "ICRA", "", "", "", "", "", "", "error")
+            emit(c, "ICRA", "", "", "", "", "", "", status_msg)
 
     # India Ratings
     try:
@@ -3481,9 +3510,13 @@ def final_ratings_all_agencies_for_companies(
                 r.get("source_url") or "",
                 r.get("status") or ("ok" if (r.get("short_term_rating") or r.get("long_term_rating")) else "not_found"),
             )
-    except Exception:
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)[:100]
+        status_msg = f"error:{error_type}"
+        print(f"India Ratings scraping failed: {error_type}: {error_msg}", file=sys.stderr)
         for c in inputs:
-            emit(c, "India Ratings", "", "", "", "", "", "", "error")
+            emit(c, "India Ratings", "", "", "", "", "", "", status_msg)
 
     # Acuité
     try:
@@ -3503,9 +3536,13 @@ def final_ratings_all_agencies_for_companies(
                 r.get("source_url") or "",
                 r.get("status") or ("ok" if (r.get("short_term_rating") or r.get("long_term_rating")) else "not_found"),
             )
-    except Exception:
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)[:100]
+        status_msg = f"error:{error_type}"
+        print(f"Acuite scraping failed: {error_type}: {error_msg}", file=sys.stderr)
         for c in inputs:
-            emit(c, "Acuite", "", "", "", "", "", "", "error")
+            emit(c, "Acuite", "", "", "", "", "", "", status_msg)
 
     return out
 
@@ -3646,7 +3683,7 @@ def iter_company_ratings(
     Useful when you want to write to CSV incrementally (flush per row) instead of building
     one big list and writing at the end.
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     session = make_session(insecure=insecure, ca_bundle=ca_bundle)
 
     for agency in AGENCIES:
@@ -4124,9 +4161,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not companies:
             p.error("Provide --companies-file, --companies-csv, or at least one --company for --final-all-agencies")
 
-        session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
+        # Enhanced session creation with automatic fallback to insecure mode if SSL fails
+        session = None
+        try:
+            session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
+            # Test session with a simple request
+            try:
+                test_resp = session.get("https://www.google.com", timeout=5)
+                if test_resp.status_code != 200:
+                    print("WARNING: Network test returned non-200 status", file=sys.stderr)
+            except Exception as e:
+                print(f"WARNING: Network test failed: {type(e).__name__}", file=sys.stderr)
+                if not bool(args.insecure):
+                    print("Attempting with --insecure flag (TLS verification disabled)", file=sys.stderr)
+                    session = make_session(insecure=True, ca_bundle=None)
+        except Exception as e:
+            print(f"ERROR: Failed to create session: {type(e).__name__}: {e}", file=sys.stderr)
+            print("Attempting with --insecure flag", file=sys.stderr)
+            session = make_session(insecure=True, ca_bundle=None)
+        
         # Default to wide format for n8n compatibility (one row per company with per-agency columns)
-        # Use --final-wide=false to get long format instead (but --final-wide is store_true, so we always use wide)
         rows = final_ratings_all_agencies_for_companies_wide(
             companies=companies,
             session=session,
@@ -4350,7 +4404,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 "short_term_rating": "",
                                 "updated_on": "",
                                 "source_url": "",
-                                "date_retrieved": dt.datetime.now(dt.UTC)
+                                "date_retrieved": dt.datetime.now(timezone.utc)
                                 .replace(microsecond=0)
                                 .isoformat()
                                 .replace("+00:00", "Z"),
@@ -4383,7 +4437,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             "short_term_rating": "",
                             "updated_on": "",
                             "source_url": "",
-                            "date_retrieved": dt.datetime.now(dt.UTC)
+                            "date_retrieved": dt.datetime.now(timezone.utc)
                             .replace(microsecond=0)
                             .isoformat()
                             .replace("+00:00", "Z"),
