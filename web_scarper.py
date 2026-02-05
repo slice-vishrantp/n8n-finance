@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
-from datetime import timezone
 import io
 import json
 import re
@@ -86,7 +85,6 @@ def _require_requests() -> None:
 def make_session(insecure: bool = False, ca_bundle: Optional[str] = None) -> "requests.Session":
     """
     Create a shared session with retries/backoff.
-    Enhanced for n8n environments with better error handling.
 
     If your environment does TLS inspection (common in corporate networks), prefer:
       --ca-bundle /path/to/corp-ca.pem
@@ -96,32 +94,19 @@ def make_session(insecure: bool = False, ca_bundle: Optional[str] = None) -> "re
     assert requests is not None  # mypy
 
     s = requests.Session()
-    # Enhanced retry strategy for n8n (more retries, longer backoff)
     retry = Retry(
-        total=5,  # Increased from 3
-        connect=5,
-        read=5,
-        status=5,
-        backoff_factor=1.0,  # Increased from 0.7
-        status_forcelist=(429, 500, 502, 503, 504, 408, 520, 521, 522, 523, 524),
-        allowed_methods=frozenset(["GET", "HEAD", "POST"]),
+        total=3,
+        connect=3,
+        read=3,
+        status=3,
+        backoff_factor=0.7,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "HEAD"]),
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    adapter = HTTPAdapter(max_retries=retry)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
-
-    # Enhanced headers for better compatibility
-    s.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/121.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-    })
 
     if insecure:
         s.verify = False
@@ -147,8 +132,10 @@ def fetch_text(url: str, timeout_s: int = 20, session: Optional["requests.Sessio
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    s = session or requests.Session()
-    resp = s.get(url, headers=headers, timeout=timeout_s)
+    # If no session provided, create one with insecure mode as fallback for n8n environments
+    if session is None:
+        session = make_session(insecure=True)  # Default to insecure for n8n compatibility
+    resp = session.get(url, headers=headers, timeout=timeout_s)
     resp.raise_for_status()
     return resp.text
 
@@ -187,6 +174,7 @@ def fetch_text_with_retries(
                     requests.exceptions.Timeout,
                     requests.exceptions.ConnectionError,
                     requests.exceptions.ChunkedEncodingError,
+                    SSLError,  # Retry on SSL errors
                 ),
             )
 
@@ -452,7 +440,7 @@ def fetch_icra_rating_details(
         "short_term_rating": short_term,
         "updated_on": updated_on,
         "source_url": url,
-        "date_retrieved": dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "date_retrieved": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "status": "ok" if (long_term or short_term) else "parsed_no_rating",
     }
 
@@ -627,7 +615,7 @@ def care_ratings_from_url(
     Example URL:
       https://www.careratings.com/upload/CompanyFiles/PR/202510161043_Jindal_Stainless_Limited.pdf
     """
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     try:
         pdf_bytes = fetch_bytes(url, session=session, timeout_s=45)
         text = extract_pdf_text(pdf_bytes)
@@ -674,7 +662,7 @@ def icra_rationale_from_id(
       https://www.icra.in/Rating/ShowRationalReportFilePdf/134727
     """
     rid = str(rationale_id).strip()
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if not rid.isdigit():
         return {
             "agency": "ICRA",
@@ -899,7 +887,7 @@ def indiaratings_pressrelease_from_id(
       https://www.indiaratings.co.in/pressReleases/GetPressreleaseData_BeforeLogin?pressReleaseId=71503
     """
     pid = str(pressrelease_id).strip()
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     source_page = f"{INDIARATINGS_BASE}/pressrelease/{pid}"
     api_url = f"{INDIARATINGS_BASE}/pressReleases/GetPressreleaseData_BeforeLogin"
     try:
@@ -1085,7 +1073,7 @@ def indiaratings_ratings_for_companies(
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for c in [x.strip() for x in companies if (x or "").strip()]:
-        retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         try:
             # IndiaRatings search endpoint appears to work best with single tokens; multi-word queries often return 0.
             tokens = re.findall(r"[A-Za-z0-9]+", c)
@@ -1268,7 +1256,7 @@ def care_ratings_for_companies(
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for c in [x.strip() for x in companies if (x or "").strip()]:
-        retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         # 1) Resolve CARE "companyName" identifier (encoded CompanyID used by their APIs)
         pr_url = ""
         updated_on = ""
@@ -1552,7 +1540,7 @@ def acuite_from_url(
     Parse an Acuité press release page like:
       https://connect.acuite.in/fcompany-details/APOLLO_MICRO_SYSTEMS_LIMITED/15th_Jul_25
     """
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     try:
         html = fetch_text(url, session=session, timeout_s=30)
         from bs4 import BeautifulSoup  # type: ignore
@@ -1946,7 +1934,7 @@ def acuite_ratings_for_companies(
                     "outlook": "",
                     "updated_on": "",
                     "source_url": "",
-                    "date_retrieved": dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "date_retrieved": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
                     "status": "not_found",
                 }
             )
@@ -2897,7 +2885,7 @@ def crisil_ratings_for_companies(
     - Only if some companies are still missing, page through Rating Rationales (cmd=RR) and stop
       once the missing companies are found.
     """
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     inputs: List[str] = [c.strip() for c in companies if (c or "").strip()]
     if not inputs:
@@ -3374,7 +3362,7 @@ def final_ratings_all_agencies_for_companies(
     Columns:
       company_name, agency, company_id, short_term_rating, short_term_date, long_term_rating, long_term_date
     """
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     inputs = [c.strip() for c in companies if (c or "").strip()]
     out: List[Dict[str, str]] = []
 
@@ -3423,13 +3411,9 @@ def final_ratings_all_agencies_for_companies(
                 agg.get("source_url", ""),
                 "ok" if (agg.get("short_term_rating") or agg.get("long_term_rating")) else "parsed_no_signal",
             )
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)[:100]  # Limit length
-        status_msg = f"error:{error_type}"
-        print(f"CRISIL scraping failed: {error_type}: {error_msg}", file=sys.stderr)
+    except Exception:
         for c in inputs:
-            emit(c, "CRISIL", "", "", "", "", "", "", status_msg)
+            emit(c, "CRISIL", "", "", "", "", "", "", "error")
 
     # CARE
     try:
@@ -3449,13 +3433,9 @@ def final_ratings_all_agencies_for_companies(
                 r.get("source_url") or "",
                 r.get("status") or ("ok" if (r.get("short_term_rating") or r.get("long_term_rating")) else "not_found"),
             )
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)[:100]
-        status_msg = f"error:{error_type}"
-        print(f"CARE Ratings scraping failed: {error_type}: {error_msg}", file=sys.stderr)
+    except Exception:
         for c in inputs:
-            emit(c, "CARE Ratings", "", "", "", "", "", "", status_msg)
+            emit(c, "CARE Ratings", "", "", "", "", "", "", "error")
 
     # ICRA (RatingDetails)
     try:
@@ -3479,18 +3459,12 @@ def final_ratings_all_agencies_for_companies(
                     row.get("source_url") or "",
                     row.get("status") or "ok",
                 )
-            except Exception as e:
-                error_type = type(e).__name__
-                status_msg = f"error:{error_type}"
-                print(f"ICRA scraping failed for {c}: {error_type}: {str(e)[:100]}", file=sys.stderr)
-                emit(c, "ICRA", "", "", "", "", "", "", status_msg)
+            except Exception:
+                emit(c, "ICRA", "", "", "", "", "", "", "error")
             time.sleep(max(0.0, float(sleep_s)))
-    except Exception as e:
-        error_type = type(e).__name__
-        status_msg = f"error:{error_type}"
-        print(f"ICRA scraping failed (general): {error_type}: {str(e)[:100]}", file=sys.stderr)
+    except Exception:
         for c in inputs:
-            emit(c, "ICRA", "", "", "", "", "", "", status_msg)
+            emit(c, "ICRA", "", "", "", "", "", "", "error")
 
     # India Ratings
     try:
@@ -3510,13 +3484,9 @@ def final_ratings_all_agencies_for_companies(
                 r.get("source_url") or "",
                 r.get("status") or ("ok" if (r.get("short_term_rating") or r.get("long_term_rating")) else "not_found"),
             )
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)[:100]
-        status_msg = f"error:{error_type}"
-        print(f"India Ratings scraping failed: {error_type}: {error_msg}", file=sys.stderr)
+    except Exception:
         for c in inputs:
-            emit(c, "India Ratings", "", "", "", "", "", "", status_msg)
+            emit(c, "India Ratings", "", "", "", "", "", "", "error")
 
     # Acuité
     try:
@@ -3536,13 +3506,9 @@ def final_ratings_all_agencies_for_companies(
                 r.get("source_url") or "",
                 r.get("status") or ("ok" if (r.get("short_term_rating") or r.get("long_term_rating")) else "not_found"),
             )
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)[:100]
-        status_msg = f"error:{error_type}"
-        print(f"Acuite scraping failed: {error_type}: {error_msg}", file=sys.stderr)
+    except Exception:
         for c in inputs:
-            emit(c, "Acuite", "", "", "", "", "", "", status_msg)
+            emit(c, "Acuite", "", "", "", "", "", "", "error")
 
     return out
 
@@ -3637,19 +3603,36 @@ def read_companies(path: str) -> List[str]:
     return companies
 
 
-def _split_companies_csv(csv_str: str) -> List[str]:
+def _split_companies_csv(raw: Optional[str]) -> List[str]:
     """
-    Split comma or semicolon separated company names.
-    Handles both comma and semicolon as separators.
+    Split a comma/semicolon-separated company string into clean names.
     """
-    if not csv_str:
+    if not raw:
         return []
-    # Try semicolon first (less common in company names)
-    if ";" in csv_str:
-        parts = csv_str.split(";")
-    else:
-        parts = csv_str.split(",")
-    return [p.strip() for p in parts if p.strip()]
+    parts = re.split(r"[,\n;]+", raw)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def collect_companies_from_args(args: argparse.Namespace) -> List[str]:
+    companies: List[str] = []
+    if getattr(args, "companies_file", None):
+        companies.extend(read_companies(args.companies_file))
+    if getattr(args, "company", None):
+        companies.extend([c.strip() for c in args.company if c.strip()])
+    if getattr(args, "companies_csv", None):
+        for raw in args.companies_csv:
+            companies.extend(_split_companies_csv(raw))
+    return [c for c in companies if c]
+
+
+def _emit_out_path(args: argparse.Namespace, out_path: str, default_msg: Optional[str] = None) -> None:
+    """
+    Print output path only when requested (useful for automation), else print default message.
+    """
+    if getattr(args, "print_out_path_only", False):
+        print(out_path)
+    elif default_msg:
+        print(default_msg)
 
 
 def write_csv(rows: Iterable[Dict[str, str]], out_path: str) -> None:
@@ -3683,7 +3666,7 @@ def iter_company_ratings(
     Useful when you want to write to CSV incrementally (flush per row) instead of building
     one big list and writing at the end.
     """
-    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     session = make_session(insecure=insecure, ca_bundle=ca_bundle)
 
     for agency in AGENCIES:
@@ -3936,11 +3919,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Write final output in wide format (one row per company; per-agency column groups).",
     )
     p.add_argument(
-        "--print-out-path-only",
-        action="store_true",
-        help="Print only the output CSV file path to stdout (for n8n execution checker).",
-    )
-    p.add_argument(
         "--icra-out-csv",
         default=f"icra_company_ratings_{dt.date.today().isoformat()}.csv",
         help="Output CSV for --icra-ratings-for-companies",
@@ -4059,8 +4037,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     p.add_argument(
         "--companies-csv",
-        help="Comma or semicolon separated company names. Example: --companies-csv 'Company A, Company B, Company C'",
-        required=False,
+        action="append",
+        default=None,
+        help="Comma/semicolon-separated company names (repeatable).",
     )
     p.add_argument(
         "--company",
@@ -4084,6 +4063,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--insecure",
         action="store_true",
         help="Disable TLS certificate verification (last resort).",
+    )
+    p.add_argument(
+        "--print-out-path-only",
+        action="store_true",
+        help="Print only the output path to stdout for automation.",
     )
     args = p.parse_args(argv)
 
@@ -4114,14 +4098,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if bool(args.acuite_ratings_for_companies):
-        companies: List[str] = []
-        if args.companies_file:
-            companies.extend(read_companies(args.companies_file))
-        if args.company:
-            companies.extend([c.strip() for c in args.company if c.strip()])
-        companies = [c for c in companies if c]
+        companies = collect_companies_from_args(args)
         if not companies:
-            p.error("Provide --companies-file or at least one --company for --acuite-ratings-for-companies")
+            p.error(
+                "Provide --companies-file, --companies-csv, or at least one --company for --acuite-ratings-for-companies"
+            )
 
         session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
         rows = acuite_ratings_for_companies(
@@ -4146,69 +4127,66 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             w.writeheader()
             for r in rows:
                 w.writerow(r)
-        print(f"Wrote {len(rows)} rows to {args.acuite_ratings_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.acuite_ratings_out_csv),
+            default_msg=f"Wrote {len(rows)} rows to {args.acuite_ratings_out_csv}",
+        )
         return 0
 
     if bool(args.final_all_agencies):
-        companies: List[str] = []
-        if args.companies_file:
-            companies.extend(read_companies(args.companies_file))
-        if args.companies_csv:
-            companies.extend(_split_companies_csv(args.companies_csv))
-        if args.company:
-            companies.extend([c.strip() for c in args.company if c.strip()])
-        companies = [c for c in companies if c]
+        companies = collect_companies_from_args(args)
         if not companies:
             p.error("Provide --companies-file, --companies-csv, or at least one --company for --final-all-agencies")
 
-        # Enhanced session creation with automatic fallback to insecure mode if SSL fails
-        session = None
-        try:
-            session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
-            # Test session with a simple request
-            try:
-                test_resp = session.get("https://www.google.com", timeout=5)
-                if test_resp.status_code != 200:
-                    print("WARNING: Network test returned non-200 status", file=sys.stderr)
-            except Exception as e:
-                print(f"WARNING: Network test failed: {type(e).__name__}", file=sys.stderr)
-                if not bool(args.insecure):
-                    print("Attempting with --insecure flag (TLS verification disabled)", file=sys.stderr)
-                    session = make_session(insecure=True, ca_bundle=None)
-        except Exception as e:
-            print(f"ERROR: Failed to create session: {type(e).__name__}: {e}", file=sys.stderr)
-            print("Attempting with --insecure flag", file=sys.stderr)
-            session = make_session(insecure=True, ca_bundle=None)
-        
-        # Default to wide format for n8n compatibility (one row per company with per-agency columns)
-        rows = final_ratings_all_agencies_for_companies_wide(
-            companies=companies,
-            session=session,
-            sleep_s=float(args.sleep),
-            insecure=bool(args.insecure),
-        )
-        fieldnames = ["company_name"]
-        for pfx in ["crisil", "care", "icra", "indiaratings", "acuite"]:
-            fieldnames.extend(
-                [
-                    f"{pfx}_company_id",
-                    f"{pfx}_short_term_rating",
-                    f"{pfx}_short_term_date",
-                    f"{pfx}_long_term_rating",
-                    f"{pfx}_long_term_date",
-                ]
+        session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
+        if bool(args.final_wide):
+            rows = final_ratings_all_agencies_for_companies_wide(
+                companies=companies,
+                session=session,
+                sleep_s=float(args.sleep),
+                insecure=bool(args.insecure),
             )
+            fieldnames = ["company_name"]
+            for pfx in ["crisil", "care", "icra", "indiaratings", "acuite"]:
+                fieldnames.extend(
+                    [
+                        f"{pfx}_company_id",
+                        f"{pfx}_short_term_rating",
+                        f"{pfx}_short_term_date",
+                        f"{pfx}_long_term_rating",
+                        f"{pfx}_long_term_date",
+                    ]
+                )
+        else:
+            rows = final_ratings_all_agencies_for_companies(
+                companies=companies,
+                session=session,
+                sleep_s=float(args.sleep),
+                insecure=bool(args.insecure),
+            )
+            fieldnames = [
+                "company_name",
+                "agency",
+                "company_id",
+                "short_term_rating",
+                "short_term_date",
+                "long_term_rating",
+                "long_term_date",
+                "source_url",
+                "date_retrieved",
+                "status",
+            ]
         with open(str(args.final_out_csv), "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             w.writeheader()
             for r in rows:
                 w.writerow(r)
-        
-        # For n8n execution checker: print only the output path if requested
-        if bool(args.print_out_path_only):
-            print(str(args.final_out_csv))
-        else:
-            print(f"Wrote {len(rows)} rows to {args.final_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.final_out_csv),
+            default_msg=f"Wrote {len(rows)} rows to {args.final_out_csv}",
+        )
         return 0
 
     if args.indiaratings_pressrelease_id:
@@ -4238,14 +4216,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if bool(args.indiaratings_ratings_for_companies):
-        companies: List[str] = []
-        if args.companies_file:
-            companies.extend(read_companies(args.companies_file))
-        if args.company:
-            companies.extend([c.strip() for c in args.company if c.strip()])
-        companies = [c for c in companies if c]
+        companies = collect_companies_from_args(args)
         if not companies:
-            p.error("Provide --companies-file or at least one --company for --indiaratings-ratings-for-companies")
+            p.error(
+                "Provide --companies-file, --companies-csv, or at least one --company for --indiaratings-ratings-for-companies"
+            )
 
         session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
         rows = indiaratings_ratings_for_companies(
@@ -4270,7 +4245,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             w.writeheader()
             for r in rows:
                 w.writerow(r)
-        print(f"Wrote {len(rows)} rows to {args.indiaratings_ratings_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.indiaratings_ratings_out_csv),
+            default_msg=f"Wrote {len(rows)} rows to {args.indiaratings_ratings_out_csv}",
+        )
         return 0
 
     if args.icra_rationale_id:
@@ -4326,14 +4305,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if bool(args.care_ratings_for_companies):
-        companies: List[str] = []
-        if args.companies_file:
-            companies.extend(read_companies(args.companies_file))
-        if args.company:
-            companies.extend([c.strip() for c in args.company if c.strip()])
-        companies = [c for c in companies if c]
+        companies = collect_companies_from_args(args)
         if not companies:
-            p.error("Provide --companies-file or at least one --company for --care-ratings-for-companies")
+            p.error("Provide --companies-file, --companies-csv, or at least one --company for --care-ratings-for-companies")
 
         session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
         rows = care_ratings_for_companies(
@@ -4358,18 +4332,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             w.writeheader()
             for r in rows:
                 w.writerow(r)
-        print(f"Wrote {len(rows)} rows to {args.care_ratings_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.care_ratings_out_csv),
+            default_msg=f"Wrote {len(rows)} rows to {args.care_ratings_out_csv}",
+        )
         return 0
 
     if bool(args.icra_ratings_for_companies):
-        companies: List[str] = []
-        if args.companies_file:
-            companies.extend(read_companies(args.companies_file))
-        if args.company:
-            companies.extend([c.strip() for c in args.company if c.strip()])
-        companies = [c for c in companies if c]
+        companies = collect_companies_from_args(args)
         if not companies:
-            p.error("Provide --companies-file or at least one --company for --icra-ratings-for-companies")
+            p.error("Provide --companies-file, --companies-csv, or at least one --company for --icra-ratings-for-companies")
 
         session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
         fieldnames = [
@@ -4404,7 +4377,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 "short_term_rating": "",
                                 "updated_on": "",
                                 "source_url": "",
-                                "date_retrieved": dt.datetime.now(timezone.utc)
+                                "date_retrieved": dt.datetime.now(dt.UTC)
                                 .replace(microsecond=0)
                                 .isoformat()
                                 .replace("+00:00", "Z"),
@@ -4437,7 +4410,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             "short_term_rating": "",
                             "updated_on": "",
                             "source_url": "",
-                            "date_retrieved": dt.datetime.now(timezone.utc)
+                            "date_retrieved": dt.datetime.now(dt.UTC)
                             .replace(microsecond=0)
                             .isoformat()
                             .replace("+00:00", "Z"),
@@ -4448,7 +4421,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     f.flush()
                 time.sleep(max(0.0, float(args.sleep)))
 
-        print(f"Wrote {total} rows to {args.icra_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.icra_out_csv),
+            default_msg=f"Wrote {total} rows to {args.icra_out_csv}",
+        )
         return 0
 
     if bool(args.crisil_retry_ratingdocs_http_errors):
@@ -4460,9 +4437,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             workers=int(args.crisil_retry_workers),
             attempts=int(args.crisil_retry_attempts),
         )
-        print(
-            f"Wrote refreshed CSV to {args.crisil_retry_out_csv} "
-            f"(total={total}, http_error_rows={http_errs}, recovered={recovered})"
+        _emit_out_path(
+            args,
+            str(args.crisil_retry_out_csv),
+            default_msg=(
+                f"Wrote refreshed CSV to {args.crisil_retry_out_csv} "
+                f"(total={total}, http_error_rows={http_errs}, recovered={recovered})"
+            ),
         )
         return 0
 
@@ -4476,7 +4457,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             max_urls=(int(args.crisil_ratingdocs_max_urls) if args.crisil_ratingdocs_max_urls is not None else None),
             resume=(not bool(args.crisil_ratingdocs_no_resume)),
         )
-        print(f"Wrote {n} rows to {args.crisil_ratingdocs_parsed_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.crisil_ratingdocs_parsed_out_csv),
+            default_msg=f"Wrote {n} rows to {args.crisil_ratingdocs_parsed_out_csv}",
+        )
         return 0
 
     if bool(args.crisil_export_ratingdocs):
@@ -4489,18 +4474,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             max_companies=(int(args.crisil_max_companies) if args.crisil_max_companies is not None else None),
             sleep_s=float(args.sleep),
         )
-        print(f"Wrote {n} RatingDocs URLs to {args.crisil_ratingdocs_out}")
+        _emit_out_path(
+            args,
+            str(args.crisil_ratingdocs_out),
+            default_msg=f"Wrote {n} RatingDocs URLs to {args.crisil_ratingdocs_out}",
+        )
         return 0
 
     if bool(args.crisil_ratings_for_companies):
-        companies: List[str] = []
-        if args.companies_file:
-            companies.extend(read_companies(args.companies_file))
-        if args.company:
-            companies.extend([c.strip() for c in args.company if c.strip()])
-        companies = [c for c in companies if c]
+        companies = collect_companies_from_args(args)
         if not companies:
-            p.error("Provide --companies-file or at least one --company for --crisil-ratings-for-companies")
+            p.error("Provide --companies-file, --companies-csv, or at least one --company for --crisil-ratings-for-companies")
         session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
         matched_rows = crisil_ratings_for_companies(
             companies=companies,
@@ -4510,18 +4494,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             enrich_updated_on=bool(args.crisil_enrich_updated_on),
         )
         write_crisil_company_matches_csv(matched_rows, args.crisil_ratings_out_csv)
-        print(f"Wrote {len(matched_rows)} rows to {args.crisil_ratings_out_csv}")
+        _emit_out_path(
+            args,
+            str(args.crisil_ratings_out_csv),
+            default_msg=f"Wrote {len(matched_rows)} rows to {args.crisil_ratings_out_csv}",
+        )
         return 0
 
     # Generic multi-agency mode (requires DuckDuckGo to be reachable for non-CRISIL agencies)
-    companies2: List[str] = []
-    if args.companies_file:
-        companies2.extend(read_companies(args.companies_file))
-    if args.company:
-        companies2.extend([c.strip() for c in args.company if c.strip()])
-    companies2 = [c for c in companies2 if c]
+    companies2 = collect_companies_from_args(args)
     if not companies2:
-        p.error("Provide --companies-file or at least one --company")
+        p.error("Provide --companies-file, --companies-csv, or at least one --company")
 
     fieldnames = [
         "company_name",
@@ -4551,11 +4534,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 total += 1
                 # Ensure progress is persisted even if the job is interrupted mid-run.
                 f.flush()
-    print(f"Wrote {total} rows to {args.out}")
+    _emit_out_path(
+        args,
+        str(args.out),
+        default_msg=f"Wrote {total} rows to {args.out}",
+    )
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
