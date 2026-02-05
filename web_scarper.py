@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+from datetime import timezone
 import io
 import json
 import re
@@ -437,7 +438,7 @@ def fetch_icra_rating_details(
         "short_term_rating": short_term,
         "updated_on": updated_on,
         "source_url": url,
-        "date_retrieved": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "date_retrieved": dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "status": "ok" if (long_term or short_term) else "parsed_no_rating",
     }
 
@@ -612,7 +613,7 @@ def care_ratings_from_url(
     Example URL:
       https://www.careratings.com/upload/CompanyFiles/PR/202510161043_Jindal_Stainless_Limited.pdf
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     try:
         pdf_bytes = fetch_bytes(url, session=session, timeout_s=45)
         text = extract_pdf_text(pdf_bytes)
@@ -659,7 +660,7 @@ def icra_rationale_from_id(
       https://www.icra.in/Rating/ShowRationalReportFilePdf/134727
     """
     rid = str(rationale_id).strip()
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if not rid.isdigit():
         return {
             "agency": "ICRA",
@@ -884,7 +885,7 @@ def indiaratings_pressrelease_from_id(
       https://www.indiaratings.co.in/pressReleases/GetPressreleaseData_BeforeLogin?pressReleaseId=71503
     """
     pid = str(pressrelease_id).strip()
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     source_page = f"{INDIARATINGS_BASE}/pressrelease/{pid}"
     api_url = f"{INDIARATINGS_BASE}/pressReleases/GetPressreleaseData_BeforeLogin"
     try:
@@ -1070,7 +1071,7 @@ def indiaratings_ratings_for_companies(
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for c in [x.strip() for x in companies if (x or "").strip()]:
-        retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         try:
             # IndiaRatings search endpoint appears to work best with single tokens; multi-word queries often return 0.
             tokens = re.findall(r"[A-Za-z0-9]+", c)
@@ -1253,7 +1254,7 @@ def care_ratings_for_companies(
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for c in [x.strip() for x in companies if (x or "").strip()]:
-        retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         # 1) Resolve CARE "companyName" identifier (encoded CompanyID used by their APIs)
         pr_url = ""
         updated_on = ""
@@ -1537,7 +1538,7 @@ def acuite_from_url(
     Parse an Acuité press release page like:
       https://connect.acuite.in/fcompany-details/APOLLO_MICRO_SYSTEMS_LIMITED/15th_Jul_25
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     try:
         html = fetch_text(url, session=session, timeout_s=30)
         from bs4 import BeautifulSoup  # type: ignore
@@ -1931,7 +1932,7 @@ def acuite_ratings_for_companies(
                     "outlook": "",
                     "updated_on": "",
                     "source_url": "",
-                    "date_retrieved": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "date_retrieved": dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
                     "status": "not_found",
                 }
             )
@@ -2882,7 +2883,7 @@ def crisil_ratings_for_companies(
     - Only if some companies are still missing, page through Rating Rationales (cmd=RR) and stop
       once the missing companies are found.
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     inputs: List[str] = [c.strip() for c in companies if (c or "").strip()]
     if not inputs:
@@ -3359,7 +3360,7 @@ def final_ratings_all_agencies_for_companies(
     Columns:
       company_name, agency, company_id, short_term_rating, short_term_date, long_term_rating, long_term_date
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     inputs = [c.strip() for c in companies if (c or "").strip()]
     out: List[Dict[str, str]] = []
 
@@ -3663,7 +3664,7 @@ def iter_company_ratings(
     Useful when you want to write to CSV incrementally (flush per row) instead of building
     one big list and writing at the end.
     """
-    retrieved_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    retrieved_at = dt.datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     session = make_session(insecure=insecure, ca_bundle=ca_bundle)
 
     for agency in AGENCIES:
@@ -4137,43 +4138,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             p.error("Provide --companies-file, --companies-csv, or at least one --company for --final-all-agencies")
 
         session = make_session(insecure=bool(args.insecure), ca_bundle=args.ca_bundle)
-        if bool(args.final_wide):
-            rows = final_ratings_all_agencies_for_companies_wide(
-                companies=companies,
-                session=session,
-                sleep_s=float(args.sleep),
-                insecure=bool(args.insecure),
+        # Always use wide format (one row per company with per-agency columns)
+        # This matches the expected output format
+        rows = final_ratings_all_agencies_for_companies_wide(
+            companies=companies,
+            session=session,
+            sleep_s=float(args.sleep),
+            insecure=bool(args.insecure),
+        )
+        fieldnames = ["company_name"]
+        for pfx in ["crisil", "care", "icra", "indiaratings", "acuite"]:
+            fieldnames.extend(
+                [
+                    f"{pfx}_company_id",
+                    f"{pfx}_short_term_rating",
+                    f"{pfx}_short_term_date",
+                    f"{pfx}_long_term_rating",
+                    f"{pfx}_long_term_date",
+                ]
             )
-            fieldnames = ["company_name"]
-            for pfx in ["crisil", "care", "icra", "indiaratings", "acuite"]:
-                fieldnames.extend(
-                    [
-                        f"{pfx}_company_id",
-                        f"{pfx}_short_term_rating",
-                        f"{pfx}_short_term_date",
-                        f"{pfx}_long_term_rating",
-                        f"{pfx}_long_term_date",
-                    ]
-                )
-        else:
-            rows = final_ratings_all_agencies_for_companies(
-                companies=companies,
-                session=session,
-                sleep_s=float(args.sleep),
-                insecure=bool(args.insecure),
-            )
-            fieldnames = [
-                "company_name",
-                "agency",
-                "company_id",
-                "short_term_rating",
-                "short_term_date",
-                "long_term_rating",
-                "long_term_date",
-                "source_url",
-                "date_retrieved",
-                "status",
-            ]
         with open(str(args.final_out_csv), "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             w.writeheader()
@@ -4374,7 +4357,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                 "short_term_rating": "",
                                 "updated_on": "",
                                 "source_url": "",
-                                "date_retrieved": dt.datetime.now(dt.UTC)
+                                "date_retrieved": dt.datetime.now(timezone.utc)
                                 .replace(microsecond=0)
                                 .isoformat()
                                 .replace("+00:00", "Z"),
@@ -4407,7 +4390,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                             "short_term_rating": "",
                             "updated_on": "",
                             "source_url": "",
-                            "date_retrieved": dt.datetime.now(dt.UTC)
+                            "date_retrieved": dt.datetime.now(timezone.utc)
                             .replace(microsecond=0)
                             .isoformat()
                             .replace("+00:00", "Z"),
@@ -4541,3 +4524,5 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
